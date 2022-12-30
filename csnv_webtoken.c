@@ -1,11 +1,15 @@
-/*
-=============================================
-Webtokens Plugin
-By: csnv
-================================================
-v1.0 Initial Release
-Exposes webtoken to third party applications
-*/
+//===== Hercules Plugin =======================================
+//= Webtoken plugin
+//===== By: ===================================================
+//= csnv
+//===== Version: ======================================
+//= 1.1
+//===== Description: ==========================================
+//= Enables webtoken functionality for third party applications
+//===== Repository: ===========================================
+//= https://github.com/csnv/webtoken
+//=============================================================
+
 #include "common/hercules.h"
 
 #include <stdio.h>
@@ -35,10 +39,6 @@ Exposes webtoken to third party applications
 
 #include "plugins/HPMHooking.h"
 #include "common/HPMDataCheck.h"
-
-// Delay in milliseconds to wait before checking if the user is logged out
-// before disabling its webtoken
-const disable_token_timeout_ms = 60000;
 
 HPExport struct hplugin_info pinfo = {
 	"csnv_webtoken",			// Plugin name
@@ -172,6 +172,7 @@ static struct online_login_data* login_add_online_user_post(struct online_login_
 	}
 
 	SQL->FreeResult(db->accounts);
+
 	return retVal;
 }
 
@@ -188,30 +189,37 @@ static void account_db_sql_destroy_post(AccountDB* self)
 	db->accounts = NULL;
 }
 
-// Disable webtoken timer
-static int login_remove_online_user_timer(int tid, int64 tick, int id, intptr_t data)
-{
-	AccountDB_SQL* db = (AccountDB_SQL*)login->accounts;
-	struct online_login_data* p;
-	p = (struct online_login_data*)idb_get(login->online_db, id);
-
-	if (p == NULL) {
-		return 0;
-	}
-
-	if (SQL_ERROR == SQL->Query(db->accounts, "UPDATE `%s` SET `web_auth_token_enabled` = '0' WHERE `account_id` = '%d'", db->account_db, id)) {
-		Sql_ShowDebug(db->accounts);
-		return 0;
-	}
-	SQL->FreeResult(db->accounts);
-
-	return 1;
-}
-
 // Login removes user from pool, disable webtoken
 static void login_remove_online_user_post(int account_id)
 {
-	timer->add(timer->gettick() + disable_token_timeout_ms, login_remove_online_user_timer, account_id, 0);
+	AccountDB_SQL* db = (AccountDB_SQL*)login->accounts;
+	struct Sql* sql_handle = db->accounts;
+	struct SqlStmt* stmt = SQL->StmtMalloc(sql_handle);
+
+	if (stmt == NULL) {
+		return;
+	}
+
+	if (SQL_ERROR == SQL->StmtPrepare(stmt, "SELECT `account_id` FROM `char` WHERE (`account_id` = ? AND `online` = 1) LIMIT 1")
+		|| SQL_ERROR == SQL->StmtBindParam(stmt, 0, SQLDT_INT, &account_id, sizeof account_id)
+		|| SQL_ERROR == SQL->StmtExecute(stmt)
+	) {
+		SQL->StmtFree(stmt);
+		return;
+	}
+
+	if (SQL->StmtNumRows(stmt) > 0) {
+		// Login removed user, but user is still online. Don't remove webtoken
+		SQL->StmtFree(stmt);
+		return;
+	}
+
+	if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `web_auth_token_enabled` = '0' WHERE `account_id` = '%d'", db->account_db, account_id)) {
+		ShowError("[csnv_webtoken] Could not update webtoken for account id %d\n", account_id);
+		return;
+	}
+
+	SQL->FreeResult(sql_handle);
 }
 
 // Login server initialized
