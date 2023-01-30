@@ -3,7 +3,7 @@
 //===== By: ===================================================
 //= csnv
 //===== Version: ======================================
-//= 1.1
+//= 1.2
 //===== Description: ==========================================
 //= Enables webtoken functionality for third party applications
 //===== Repository: ===========================================
@@ -40,10 +40,12 @@
 #include "plugins/HPMHooking.h"
 #include "common/HPMDataCheck.h"
 
+#define DISABLE_WEBTOKEN_DELAY 5000
+
 HPExport struct hplugin_info pinfo = {
 	"csnv_webtoken",			// Plugin name
 	SERVER_TYPE_LOGIN | SERVER_TYPE_CHAR | SERVER_TYPE_MAP,	// Which server types this plugin works with?
-	"1.0",				// Plugin version
+	"1.2",				// Plugin version
 	HPM_VERSION,		// HPM Version (don't change, macro is automatically updated)
 };
 
@@ -189,37 +191,46 @@ static void account_db_sql_destroy_post(AccountDB* self)
 	db->accounts = NULL;
 }
 
-// Login removes user from pool, disable webtoken
-static void login_remove_online_user_post(int account_id)
+// Disable token if the user is not logged in
+static int login_remove_online_user_timer(int tid, int64 tick, int account_id, intptr_t data)
 {
 	AccountDB_SQL* db = (AccountDB_SQL*)login->accounts;
 	struct Sql* sql_handle = db->accounts;
 	struct SqlStmt* stmt = SQL->StmtMalloc(sql_handle);
 
 	if (stmt == NULL) {
-		return;
+		return 0;
 	}
 
 	if (SQL_ERROR == SQL->StmtPrepare(stmt, "SELECT `account_id` FROM `char` WHERE (`account_id` = ? AND `online` = 1) LIMIT 1")
 		|| SQL_ERROR == SQL->StmtBindParam(stmt, 0, SQLDT_INT, &account_id, sizeof account_id)
 		|| SQL_ERROR == SQL->StmtExecute(stmt)
-	) {
+		) {
 		SQL->StmtFree(stmt);
-		return;
+		return 0;
 	}
 
 	if (SQL->StmtNumRows(stmt) > 0) {
 		// Login removed user, but user is still online. Don't remove webtoken
 		SQL->StmtFree(stmt);
-		return;
+		return 0;
 	}
 
 	if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `web_auth_token_enabled` = '0' WHERE `account_id` = '%d'", db->account_db, account_id)) {
 		ShowError("[csnv_webtoken] Could not update webtoken for account id %d\n", account_id);
-		return;
+		return 0;
 	}
 
 	SQL->FreeResult(sql_handle);
+
+	return 1;
+}
+
+// Login removes user from pool, disable webtoken after a while
+static void login_remove_online_user_post(int account_id)
+{
+	int64 tick = timer->gettick();
+	timer->add(tick + DISABLE_WEBTOKEN_DELAY, login_remove_online_user_timer, account_id, 0);
 }
 
 // Login server initialized
