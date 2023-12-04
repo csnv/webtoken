@@ -1,3 +1,6 @@
+> [!WARNING]  
+> Hercules already has support for webtoken. This project is no longer needed and is discontinued.
+
 # CSNV's webtoken plugin
 
 Webtoken plugin for the Hercules emulator.
